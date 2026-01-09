@@ -17,6 +17,7 @@ const CONFIG_FILE = "./bot-config.json"
 
 let config = {
   botActive: true,
+  replyActive: true,        // 🔔 reply on/off
   respondGroup: false,
   notifyNonAdmin: true,
   autoread: false,
@@ -53,34 +54,8 @@ function aiNotSure(text) {
   )
 }
 
-// realtime / dinamis → wajib search
-function isRealtimeQuery(text) {
-  const t = text.toLowerCase()
-  return (
-    t.includes("dolar") ||
-    t.includes("usd") ||
-    t.includes("kurs") ||
-    t.includes("rupiah") ||
-    t.includes("harga") ||
-    t.includes("hari ini") ||
-    t.includes("sekarang") ||
-    t.includes("bitcoin") ||
-    t.includes("btc") ||
-    t.includes("emas") ||
-    t.includes("bbm")
-  )
-}
-
-// kata yang TIDAK BOLEH dianggap nama kota
 function isInvalidCity(word) {
-  const invalid = [
-    "sekarang",
-    "saat ini",
-    "hari ini",
-    "besok",
-    "tadi",
-    "ini"
-  ]
+  const invalid = ["sekarang", "saat ini", "hari ini", "ini", "tadi"]
   return invalid.includes(word.trim())
 }
 
@@ -98,6 +73,7 @@ function toolTime() {
   })}`
 }
 
+// ===== CUACA =====
 async function toolWeather(city) {
   try {
     const geo = await fetch(
@@ -107,7 +83,7 @@ async function toolWeather(city) {
     ).then(r => r.json())
 
     if (!geo.results?.length) {
-      return `😅 Aku nggak nemu kota *${city}*. Coba tulis nama kotanya lebih jelas ya.`
+      return `😅 Aku nggak nemu kota *${city}*.`
     }
 
     const { latitude, longitude, name } = geo.results[0]
@@ -116,15 +92,30 @@ async function toolWeather(city) {
     ).then(r => r.json())
 
     const c = w.current_weather
-    return `🌦️ Cuaca sekarang di *${name}*:
+    return `🌦️ Cuaca di *${name}*:
 • Suhu: ${c.temperature}°C
 • Angin: ${c.windspeed} km/jam`
   } catch {
-    return "😅 Gagal ambil info cuaca. Coba lagi ya."
+    return "😅 Gagal ambil info cuaca."
   }
 }
 
-// SEARCH INTERNET (Indonesia)
+// ===== KURS USD → IDR (REALTIME, VALID) =====
+async function toolUsdToIdr() {
+  try {
+    const res = await fetch("https://open.er-api.com/v6/latest/USD")
+    const j = await res.json()
+
+    if (j.result !== "success") throw new Error()
+
+    const rate = j.rates.IDR
+    return `💵 1 USD ≈ Rp ${rate.toLocaleString("id-ID")}`
+  } catch {
+    return "😅 Lagi nggak bisa ambil data kurs dolar."
+  }
+}
+
+// ===== SEARCH INTERNET (NON-NUMERIC) =====
 async function toolSearch(query) {
   try {
     const q = `${query} site:id`
@@ -138,9 +129,9 @@ async function toolSearch(query) {
     if (j.AbstractText) return j.AbstractText
     if (j.RelatedTopics?.length) return j.RelatedTopics[0].Text
 
-    return "Hmm… aku belum nemu info yang pas di internet 😅"
+    return "Hmm… aku belum nemu info yang pas 😅"
   } catch {
-    return "😅 Lagi ada kendala waktu cari info di internet."
+    return "😅 Lagi ada kendala waktu cari info."
   }
 }
 
@@ -151,9 +142,8 @@ async function askAI(jid, prompt) {
       role: "system",
       content:
         "Kamu adalah asisbot, teman ngobrol santai. " +
-        "SELALU pakai Bahasa Indonesia yang ringan dan nggak formal. " +
-        "Jawaban singkat, natural, pakai emoticon seperlunya 🙂. " +
-        "Kalau ragu, bilang singkat saja."
+        "Selalu pakai Bahasa Indonesia yang ringan, nggak formal. " +
+        "Jawaban singkat dan natural 🙂."
     },
     ...(memory[jid] || []),
     { role: "user", content: prompt }
@@ -232,7 +222,7 @@ async function startBot() {
       if (config.admins.length === 0) {
         config.admins.push(sender)
         saveConfig()
-        await sock.sendMessage(from, { text: "🎉 Oke! Kamu sekarang owner ya." })
+        await sock.sendMessage(from, { text: "🎉 Oke! Kamu sekarang owner." })
       } else {
         await sock.sendMessage(from, { text: "Owner-nya sudah ada 😅" })
       }
@@ -250,14 +240,15 @@ async function startBot() {
     if (text.startsWith(".")) {
       if (!isAdmin) {
         if (config.notifyNonAdmin) {
-          await sock.sendMessage(from, { text: "😅 Kamu bukan admin ya." })
+          await sock.sendMessage(from, { text: "😅 Kamu bukan admin." })
         }
         return
       }
 
       if (lower === ".admin") {
         await sock.sendMessage(from, {
-          text: `🛠️ *Admin Menu*
+          text: `🛠️ Admin Menu
+.admin reply on/off
 .admin autoread on/off
 .admin autotyping on/off
 .admin add 628xxx
@@ -268,40 +259,22 @@ async function startBot() {
         return
       }
 
-      if (lower === ".admin autoread on") {
-        config.autoread = true; saveConfig()
-        await sock.sendMessage(from, { text: "📖 Auto-read aktif." })
+      if (lower === ".admin reply on") {
+        config.replyActive = true; saveConfig()
+        await sock.sendMessage(from, { text: "🔔 Reply diaktifkan." })
         return
       }
 
-      if (lower === ".admin autoread off") {
-        config.autoread = false; saveConfig()
-        await sock.sendMessage(from, { text: "📖 Auto-read dimatiin." })
-        return
-      }
-
-      if (lower === ".admin autotyping on") {
-        config.autotyping = true; saveConfig()
-        await sock.sendMessage(from, { text: "⌨️ Auto-typing nyala." })
-        return
-      }
-
-      if (lower === ".admin autotyping off") {
-        config.autotyping = false; saveConfig()
-        await sock.sendMessage(from, { text: "⌨️ Auto-typing mati." })
-        return
-      }
-
-      if (lower === ".admin list owner") {
-        await sock.sendMessage(from, { text: `👑 Owner: ${config.admins[0]}` })
+      if (lower === ".admin reply off") {
+        config.replyActive = false; saveConfig()
+        await sock.sendMessage(from, { text: "🔕 Reply dimatikan." })
         return
       }
 
       if (lower === ".admin status") {
         await sock.sendMessage(from, {
           text: `📊 Status:
-Bot: ${config.botActive ? "ON" : "OFF"}
-Grup: ${config.respondGroup ? "ON" : "OFF"}
+Reply: ${config.replyActive}
 AutoRead: ${config.autoread}
 AutoTyping: ${config.autotyping}
 Admin: ${config.admins.join(", ")}`
@@ -313,32 +286,36 @@ Admin: ${config.admins.join(", ")}`
       return
     }
 
-    if (!config.botActive) return
+    if (!config.botActive || !config.replyActive) return
 
-    // ===== WEATHER (SMART + ASK CITY) =====
+    // ===== USD → IDR =====
+    if (/dolar|usd/i.test(lower) && /rupiah|idr/i.test(lower)) {
+      await sock.sendMessage(from, { text: await toolUsdToIdr() })
+      return
+    }
+
+    // ===== WEATHER =====
     if (/cuaca|suhu/i.test(lower)) {
       const match = lower.match(/cuaca\s+(?:di\s+)?([a-z\s]+)/i)
       let city = match ? match[1].trim() : null
 
       if (city && isInvalidCity(city)) city = null
 
-      if (city && city.length >= 3) {
+      if (city) {
         intent[from] = null
         await sock.sendMessage(from, { text: await toolWeather(city) })
         return
       }
 
       intent[from] = "ask_weather_city"
-      await sock.sendMessage(from, { text: "📍 Di kota mana nih?" })
+      await sock.sendMessage(from, { text: "📍 Di kota mana?" })
       return
     }
 
     if (intent[from] === "ask_weather_city") {
-      if (/^[a-z\s]+$/i.test(text) && !isInvalidCity(lower)) {
-        await sock.sendMessage(from, { text: await toolWeather(text.trim()) })
-        intent[from] = null
-        return
-      }
+      await sock.sendMessage(from, { text: await toolWeather(text) })
+      intent[from] = null
+      return
     }
 
     // ===== TIME =====
@@ -347,17 +324,12 @@ Admin: ${config.admins.join(", ")}`
       return
     }
 
-    // ===== AI + AUTO SEARCH =====
+    // ===== AI + SEARCH FALLBACK =====
     remember(from, "user", text)
 
-    let ans = ""
-    if (isRealtimeQuery(text)) {
-      ans = `🔍 Aku cek dulu ya...\n\n${await toolSearch(text)}`
-    } else {
-      ans = await askAI(from, text)
-      if (aiNotSure(ans)) {
-        ans = `🔍 Aku cari dulu bentar...\n\n${await toolSearch(text)}`
-      }
+    let ans = await askAI(from, text)
+    if (aiNotSure(ans)) {
+      ans = `🔍 Aku cari dulu ya...\n\n${await toolSearch(text)}`
     }
 
     remember(from, "assistant", ans)
