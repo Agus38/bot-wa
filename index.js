@@ -45,7 +45,7 @@ function aiNotSure(text) {
   if (!text) return true
   const t = text.toLowerCase()
   return (
-    t.length < 20 ||
+    t.length < 25 ||
     t.includes("tidak tahu") ||
     t.includes("kurang yakin") ||
     t.includes("belum tahu") ||
@@ -53,7 +53,7 @@ function aiNotSure(text) {
   )
 }
 
-// REALTIME / DYNAMIC QUERY → WAJIB SEARCH
+// realtime / dinamis → wajib search
 function isRealtimeQuery(text) {
   const t = text.toLowerCase()
   return (
@@ -71,6 +71,19 @@ function isRealtimeQuery(text) {
   )
 }
 
+// kata yang TIDAK BOLEH dianggap nama kota
+function isInvalidCity(word) {
+  const invalid = [
+    "sekarang",
+    "saat ini",
+    "hari ini",
+    "besok",
+    "tadi",
+    "ini"
+  ]
+  return invalid.includes(word.trim())
+}
+
 // ================= TOOLS =================
 function toolTime() {
   const d = new Date()
@@ -80,7 +93,7 @@ function toolTime() {
     month: "long",
     year: "numeric",
     timeZone: "Asia/Jakarta"
-  })}\n⏰ Jam ${d.toLocaleTimeString("id-ID", {
+  })}\n⏰ ${d.toLocaleTimeString("id-ID", {
     timeZone: "Asia/Jakarta"
   })}`
 }
@@ -90,10 +103,12 @@ async function toolWeather(city) {
     const geo = await fetch(
       `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
         city + ", Indonesia"
-      )}&count=1`
+      )}&count=1&language=id`
     ).then(r => r.json())
 
-    if (!geo.results?.length) return `❌ Kota "${city}" tidak ditemukan`
+    if (!geo.results?.length) {
+      return `😅 Aku nggak nemu kota *${city}*. Coba tulis nama kotanya lebih jelas ya.`
+    }
 
     const { latitude, longitude, name } = geo.results[0]
     const w = await fetch(
@@ -101,30 +116,31 @@ async function toolWeather(city) {
     ).then(r => r.json())
 
     const c = w.current_weather
-    return `🌦️ Cuaca di ${name}
+    return `🌦️ Cuaca sekarang di *${name}*:
 • Suhu: ${c.temperature}°C
 • Angin: ${c.windspeed} km/jam`
   } catch {
-    return "❌ Gagal mengambil data cuaca"
+    return "😅 Gagal ambil info cuaca. Coba lagi ya."
   }
 }
 
-// SEARCH INTERNET (DuckDuckGo – gratis)
+// SEARCH INTERNET (Indonesia)
 async function toolSearch(query) {
   try {
+    const q = `${query} site:id`
     const res = await fetch(
       `https://api.duckduckgo.com/?q=${encodeURIComponent(
-        query
-      )}&format=json&no_html=1&skip_disambig=1`
+        q
+      )}&format=json&kl=id-id&no_html=1&skip_disambig=1`
     )
     const j = await res.json()
 
     if (j.AbstractText) return j.AbstractText
     if (j.RelatedTopics?.length) return j.RelatedTopics[0].Text
 
-    return "Tidak ditemukan informasi relevan."
+    return "Hmm… aku belum nemu info yang pas di internet 😅"
   } catch {
-    return "Gagal mencari informasi dari internet."
+    return "😅 Lagi ada kendala waktu cari info di internet."
   }
 }
 
@@ -134,8 +150,10 @@ async function askAI(jid, prompt) {
     {
       role: "system",
       content:
-        "Kamu adalah asisbot, teman ngobrol santai 🙂. " +
-        "Jawaban singkat, tidak formal, emoticon seperlunya."
+        "Kamu adalah asisbot, teman ngobrol santai. " +
+        "SELALU pakai Bahasa Indonesia yang ringan dan nggak formal. " +
+        "Jawaban singkat, natural, pakai emoticon seperlunya 🙂. " +
+        "Kalau ragu, bilang singkat saja."
     },
     ...(memory[jid] || []),
     { role: "user", content: prompt }
@@ -150,7 +168,7 @@ async function askAI(jid, prompt) {
     body: JSON.stringify({
       model: "llama-3.1-8b-instant",
       messages,
-      temperature: 0.6
+      temperature: 0.7
     })
   })
 
@@ -214,9 +232,9 @@ async function startBot() {
       if (config.admins.length === 0) {
         config.admins.push(sender)
         saveConfig()
-        await sock.sendMessage(from, { text: "✅ Kamu sekarang OWNER." })
+        await sock.sendMessage(from, { text: "🎉 Oke! Kamu sekarang owner ya." })
       } else {
-        await sock.sendMessage(from, { text: "⛔ Owner sudah ditetapkan." })
+        await sock.sendMessage(from, { text: "Owner-nya sudah ada 😅" })
       }
       return
     }
@@ -232,20 +250,18 @@ async function startBot() {
     if (text.startsWith(".")) {
       if (!isAdmin) {
         if (config.notifyNonAdmin) {
-          await sock.sendMessage(from, { text: "⛔ Kamu bukan admin." })
+          await sock.sendMessage(from, { text: "😅 Kamu bukan admin ya." })
         }
         return
       }
 
       if (lower === ".admin") {
         await sock.sendMessage(from, {
-          text: `🛠️ ADMIN MENU
-.admin on / off
-.admin group on / off
+          text: `🛠️ *Admin Menu*
+.admin autoread on/off
+.admin autotyping on/off
 .admin add 628xxx
 .admin del 628xxx
-.admin autoread on / off
-.admin autotyping on / off
 .admin list owner
 .admin status`
         })
@@ -254,36 +270,36 @@ async function startBot() {
 
       if (lower === ".admin autoread on") {
         config.autoread = true; saveConfig()
-        await sock.sendMessage(from, { text: "📖 Auto-read diaktifkan." })
+        await sock.sendMessage(from, { text: "📖 Auto-read aktif." })
         return
       }
 
       if (lower === ".admin autoread off") {
         config.autoread = false; saveConfig()
-        await sock.sendMessage(from, { text: "📖 Auto-read dimatikan." })
+        await sock.sendMessage(from, { text: "📖 Auto-read dimatiin." })
         return
       }
 
       if (lower === ".admin autotyping on") {
         config.autotyping = true; saveConfig()
-        await sock.sendMessage(from, { text: "⌨️ Auto-typing diaktifkan." })
+        await sock.sendMessage(from, { text: "⌨️ Auto-typing nyala." })
         return
       }
 
       if (lower === ".admin autotyping off") {
         config.autotyping = false; saveConfig()
-        await sock.sendMessage(from, { text: "⌨️ Auto-typing dimatikan." })
+        await sock.sendMessage(from, { text: "⌨️ Auto-typing mati." })
         return
       }
 
       if (lower === ".admin list owner") {
-        await sock.sendMessage(from, { text: `👑 OWNER:\n${config.admins[0]}` })
+        await sock.sendMessage(from, { text: `👑 Owner: ${config.admins[0]}` })
         return
       }
 
       if (lower === ".admin status") {
         await sock.sendMessage(from, {
-          text: `📊 STATUS
+          text: `📊 Status:
 Bot: ${config.botActive ? "ON" : "OFF"}
 Grup: ${config.respondGroup ? "ON" : "OFF"}
 AutoRead: ${config.autoread}
@@ -301,11 +317,10 @@ Admin: ${config.admins.join(", ")}`
 
     // ===== WEATHER (SMART + ASK CITY) =====
     if (/cuaca|suhu/i.test(lower)) {
-      const cityMatch =
-        lower.match(/di\s+([a-z\s]+)/i) ||
-        lower.match(/cuaca\s+([a-z\s]+)/i)
+      const match = lower.match(/cuaca\s+(?:di\s+)?([a-z\s]+)/i)
+      let city = match ? match[1].trim() : null
 
-      const city = cityMatch ? cityMatch[1].trim() : null
+      if (city && isInvalidCity(city)) city = null
 
       if (city && city.length >= 3) {
         intent[from] = null
@@ -314,12 +329,12 @@ Admin: ${config.admins.join(", ")}`
       }
 
       intent[from] = "ask_weather_city"
-      await sock.sendMessage(from, { text: "📍 Di kota mana?" })
+      await sock.sendMessage(from, { text: "📍 Di kota mana nih?" })
       return
     }
 
     if (intent[from] === "ask_weather_city") {
-      if (/^[a-z\s]+$/i.test(text)) {
+      if (/^[a-z\s]+$/i.test(text) && !isInvalidCity(lower)) {
         await sock.sendMessage(from, { text: await toolWeather(text.trim()) })
         intent[from] = null
         return
@@ -337,11 +352,11 @@ Admin: ${config.admins.join(", ")}`
 
     let ans = ""
     if (isRealtimeQuery(text)) {
-      ans = `🔍 Aku cek info terbaru ya...\n\n${await toolSearch(text)}`
+      ans = `🔍 Aku cek dulu ya...\n\n${await toolSearch(text)}`
     } else {
       ans = await askAI(from, text)
       if (aiNotSure(ans)) {
-        ans = `🔍 Aku cari dulu ya...\n\n${await toolSearch(text)}`
+        ans = `🔍 Aku cari dulu bentar...\n\n${await toolSearch(text)}`
       }
     }
 
