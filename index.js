@@ -34,10 +34,24 @@ const saveConfig = () =>
 const memory = {}
 const intent = {}
 
-const remember = (jid, role, text) => {
+function remember(jid, role, text) {
   if (!memory[jid]) memory[jid] = []
   memory[jid].push({ role, content: text })
   if (memory[jid].length > 6) memory[jid].shift()
+}
+
+// ================= UTIL =================
+function aiNotSure(text) {
+  if (!text) return true
+  const t = text.toLowerCase()
+  return (
+    t.length < 15 ||
+    t.includes("tidak tahu") ||
+    t.includes("kurang yakin") ||
+    t.includes("belum tahu") ||
+    t.includes("maaf") ||
+    t.includes("aku tidak")
+  )
 }
 
 // ================= TOOLS =================
@@ -49,7 +63,9 @@ function toolTime() {
     month: "long",
     year: "numeric",
     timeZone: "Asia/Jakarta"
-  })}\n⏰ Jam ${d.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}`
+  })}\n⏰ Jam ${d.toLocaleTimeString("id-ID", {
+    timeZone: "Asia/Jakarta"
+  })}`
 }
 
 async function toolWeather(city) {
@@ -76,7 +92,7 @@ async function toolWeather(city) {
   }
 }
 
-// ===== GOOGLE SEARCH (DuckDuckGo) =====
+// ===== SEARCH INTERNET (DuckDuckGo) =====
 async function toolSearch(query) {
   try {
     const res = await fetch(
@@ -86,17 +102,12 @@ async function toolSearch(query) {
     )
     const j = await res.json()
 
-    if (j.AbstractText) {
-      return `🔍 ${query}\n\n${j.AbstractText}`
-    }
+    if (j.AbstractText) return j.AbstractText
+    if (j.RelatedTopics?.length) return j.RelatedTopics[0].Text
 
-    if (j.RelatedTopics?.length) {
-      return `🔍 ${query}\n\n${j.RelatedTopics[0].Text}`
-    }
-
-    return `🔍 ${query}\nTidak ditemukan ringkasan.`
+    return "Tidak ditemukan informasi yang relevan."
   } catch {
-    return "❌ Gagal melakukan pencarian."
+    return "Gagal mencari informasi dari internet."
   }
 }
 
@@ -108,7 +119,7 @@ async function askAI(jid, prompt) {
       content:
         "Kamu adalah asisbot, teman ngobrol santai 🙂. " +
         "Jawaban singkat, tidak formal, emoticon seperlunya. " +
-        "Jangan pernah membahas pencipta, perusahaan, atau data sensitif."
+        "Jika ragu, jawab sejujurnya singkat."
     },
     ...(memory[jid] || []),
     { role: "user", content: prompt }
@@ -128,7 +139,7 @@ async function askAI(jid, prompt) {
   })
 
   const j = await res.json()
-  return j.choices?.[0]?.message?.content || "Aku belum tau jawabannya 😅"
+  return j.choices?.[0]?.message?.content || ""
 }
 
 // ================= BOT =================
@@ -171,7 +182,6 @@ async function startBot() {
     const senderJid = isGroup ? m.key.participant : from
     const sender = senderJid.split("@")[0]
     const isAdmin = config.admins.includes(sender)
-    const isOwner = config.admins[0] === sender
 
     const raw =
       m.message.conversation ||
@@ -181,34 +191,29 @@ async function startBot() {
     const text = raw.trim()
     const lower = text.toLowerCase()
 
-    if (config.autoread) {
-      await sock.readMessages([m.key])
-    }
+    if (config.autoread) await sock.readMessages([m.key])
+    if (config.autotyping) await sock.sendPresenceUpdate("composing", from)
 
-    if (config.autotyping) {
-      await sock.sendPresenceUpdate("composing", from)
-    }
-
-    // ================= CLAIM OWNER =================
+    // ===== CLAIM OWNER =====
     if (lower === ".claim") {
       if (config.admins.length === 0) {
         config.admins.push(sender)
         saveConfig()
         await sock.sendMessage(from, { text: "✅ Kamu sekarang OWNER." })
       } else {
-        await sock.sendMessage(from, { text: "⛔ Owner sudah ada." })
+        await sock.sendMessage(from, { text: "⛔ Owner sudah ditetapkan." })
       }
       return
     }
 
-    // ================= PING =================
+    // ===== PING =====
     if (lower === ".ping") {
       const ping = Date.now() - startTime
       await sock.sendMessage(from, { text: `🏓 Pong! ${ping} ms` })
       return
     }
 
-    // ================= COMMAND ROUTER =================
+    // ===== COMMAND ROUTER =====
     if (text.startsWith(".")) {
       if (!isAdmin) {
         if (config.notifyNonAdmin) {
@@ -232,31 +237,39 @@ async function startBot() {
         return
       }
 
-      if (lower === ".admin autoread on") config.autoread = true
-      if (lower === ".admin autoread off") config.autoread = false
-      if (lower === ".admin autotyping on") config.autotyping = true
-      if (lower === ".admin autotyping off") config.autotyping = false
+      if (lower === ".admin autoread on") {
+        config.autoread = true
+        saveConfig()
+        await sock.sendMessage(from, { text: "📖 Auto-read diaktifkan." })
+        return
+      }
+
+      if (lower === ".admin autoread off") {
+        config.autoread = false
+        saveConfig()
+        await sock.sendMessage(from, { text: "📖 Auto-read dimatikan." })
+        return
+      }
+
+      if (lower === ".admin autotyping on") {
+        config.autotyping = true
+        saveConfig()
+        await sock.sendMessage(from, { text: "⌨️ Auto-typing diaktifkan." })
+        return
+      }
+
+      if (lower === ".admin autotyping off") {
+        config.autotyping = false
+        saveConfig()
+        await sock.sendMessage(from, { text: "⌨️ Auto-typing dimatikan." })
+        return
+      }
 
       if (lower === ".admin list owner") {
         await sock.sendMessage(from, {
           text: `👑 OWNER:\n${config.admins[0]}`
         })
         return
-      }
-
-      if (lower.startsWith(".admin add ")) {
-        const num = lower.split(" ")[2]?.replace(/\D/g, "")
-        if (!num || config.admins.includes(num)) return
-        config.admins.push(num)
-      }
-
-      if (lower.startsWith(".admin del ")) {
-        const num = lower.split(" ")[2]?.replace(/\D/g, "")
-        if (num === config.admins[0]) {
-          await sock.sendMessage(from, { text: "⛔ Owner tidak bisa dihapus." })
-          return
-        }
-        config.admins = config.admins.filter(a => a !== num)
       }
 
       if (lower === ".admin status") {
@@ -268,25 +281,25 @@ AutoRead: ${config.autoread}
 AutoTyping: ${config.autotyping}
 Admin: ${config.admins.join(", ")}`
         })
-        saveConfig()
         return
       }
 
       saveConfig()
-      await sock.sendMessage(from, { text: "✅ Admin command OK." })
       return
     }
 
     if (!config.botActive) return
 
-    // ================= SEARCH =================
+    // ===== SEARCH MANUAL =====
     if (lower.startsWith("cari ")) {
       const q = text.slice(5)
-      await sock.sendMessage(from, { text: await toolSearch(q) })
+      await sock.sendMessage(from, {
+        text: `🔍 ${await toolSearch(q)}`
+      })
       return
     }
 
-    // ================= TOOLS =================
+    // ===== TOOLS =====
     if (/jam|waktu|tanggal|sekarang/i.test(lower)) {
       await sock.sendMessage(from, { text: toolTime() })
       return
@@ -304,9 +317,15 @@ Admin: ${config.admins.join(", ")}`
       return
     }
 
-    // ================= AI =================
+    // ===== AI + AUTO SEARCH FALLBACK =====
     remember(from, "user", text)
-    const ans = await askAI(from, text)
+    let ans = await askAI(from, text)
+
+    if (aiNotSure(ans)) {
+      const result = await toolSearch(text)
+      ans = `🔍 Aku cari dulu ya...\n\n${result}`
+    }
+
     remember(from, "assistant", ans)
     await sock.sendMessage(from, { text: ans })
   })
