@@ -19,7 +19,9 @@ let config = {
   botActive: true,
   respondGroup: false,
   notifyNonAdmin: true,
-  admins: [] // admin diisi via .claim
+  autoread: false,
+  autotyping: false,
+  admins: [] // admin[0] = owner
 }
 
 if (fs.existsSync(CONFIG_FILE)) {
@@ -32,7 +34,7 @@ const saveConfig = () =>
 const memory = {}
 const intent = {}
 
-function remember(jid, role, text) {
+const remember = (jid, role, text) => {
   if (!memory[jid]) memory[jid] = []
   memory[jid].push({ role, content: text })
   if (memory[jid].length > 6) memory[jid].shift()
@@ -47,9 +49,7 @@ function toolTime() {
     month: "long",
     year: "numeric",
     timeZone: "Asia/Jakarta"
-  })}\n⏰ Jam ${d.toLocaleTimeString("id-ID", {
-    timeZone: "Asia/Jakarta"
-  })}`
+  })}\n⏰ Jam ${d.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}`
 }
 
 async function toolWeather(city) {
@@ -73,6 +73,30 @@ async function toolWeather(city) {
 • Angin: ${c.windspeed} km/jam`
   } catch {
     return "❌ Gagal ambil cuaca"
+  }
+}
+
+// ===== GOOGLE SEARCH (DuckDuckGo) =====
+async function toolSearch(query) {
+  try {
+    const res = await fetch(
+      `https://api.duckduckgo.com/?q=${encodeURIComponent(
+        query
+      )}&format=json&no_html=1&skip_disambig=1`
+    )
+    const j = await res.json()
+
+    if (j.AbstractText) {
+      return `🔍 ${query}\n\n${j.AbstractText}`
+    }
+
+    if (j.RelatedTopics?.length) {
+      return `🔍 ${query}\n\n${j.RelatedTopics[0].Text}`
+    }
+
+    return `🔍 ${query}\nTidak ditemukan ringkasan.`
+  } catch {
+    return "❌ Gagal melakukan pencarian."
   }
 }
 
@@ -111,6 +135,8 @@ async function askAI(jid, prompt) {
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
 
 async function startBot() {
+  const startTime = Date.now()
+
   const { state, saveCreds } = await useMultiFileAuthState("./session")
   const { version } = await fetchLatestBaileysVersion()
 
@@ -143,8 +169,9 @@ async function startBot() {
     if (isGroup && !config.respondGroup) return
 
     const senderJid = isGroup ? m.key.participant : from
-    const senderNumber = senderJid.split("@")[0]
-    const isAdmin = config.admins.includes(senderNumber)
+    const sender = senderJid.split("@")[0]
+    const isAdmin = config.admins.includes(sender)
+    const isOwner = config.admins[0] === sender
 
     const raw =
       m.message.conversation ||
@@ -154,27 +181,36 @@ async function startBot() {
     const text = raw.trim()
     const lower = text.toLowerCase()
 
+    if (config.autoread) {
+      await sock.readMessages([m.key])
+    }
+
+    if (config.autotyping) {
+      await sock.sendPresenceUpdate("composing", from)
+    }
+
     // ================= CLAIM OWNER =================
     if (lower === ".claim") {
       if (config.admins.length === 0) {
-        config.admins.push(senderNumber)
+        config.admins.push(sender)
         saveConfig()
-        console.log(`[OWNER CLAIMED] ${senderNumber}`)
-        await sock.sendMessage(from, {
-          text: "✅ Kamu sekarang ADMIN pertama (OWNER)."
-        })
+        await sock.sendMessage(from, { text: "✅ Kamu sekarang OWNER." })
       } else {
-        await sock.sendMessage(from, {
-          text: "⛔ Owner sudah ditetapkan."
-        })
+        await sock.sendMessage(from, { text: "⛔ Owner sudah ada." })
       }
+      return
+    }
+
+    // ================= PING =================
+    if (lower === ".ping") {
+      const ping = Date.now() - startTime
+      await sock.sendMessage(from, { text: `🏓 Pong! ${ping} ms` })
       return
     }
 
     // ================= COMMAND ROUTER =================
     if (text.startsWith(".")) {
       if (!isAdmin) {
-        console.log(`[ADMIN DENIED] ${senderNumber}: ${text}`)
         if (config.notifyNonAdmin) {
           await sock.sendMessage(from, { text: "⛔ Kamu bukan admin." })
         }
@@ -184,59 +220,52 @@ async function startBot() {
       if (lower === ".admin") {
         await sock.sendMessage(from, {
           text: `🛠️ ADMIN MENU
-.admin on
-.admin off
-.admin group on
-.admin group off
-.admin status
+.admin on / off
+.admin group on / off
 .admin add 628xxx
-.admin del 628xxx`
+.admin del 628xxx
+.admin autoread on / off
+.admin autotyping on / off
+.admin list owner
+.admin status`
         })
         return
       }
 
-      if (lower === ".admin on") config.botActive = true
-      if (lower === ".admin off") config.botActive = false
-      if (lower === ".admin group on") config.respondGroup = true
-      if (lower === ".admin group off") config.respondGroup = false
+      if (lower === ".admin autoread on") config.autoread = true
+      if (lower === ".admin autoread off") config.autoread = false
+      if (lower === ".admin autotyping on") config.autotyping = true
+      if (lower === ".admin autotyping off") config.autotyping = false
+
+      if (lower === ".admin list owner") {
+        await sock.sendMessage(from, {
+          text: `👑 OWNER:\n${config.admins[0]}`
+        })
+        return
+      }
 
       if (lower.startsWith(".admin add ")) {
         const num = lower.split(" ")[2]?.replace(/\D/g, "")
-        if (!num) {
-          await sock.sendMessage(from, { text: "❌ Format salah. Contoh: .admin add 628xxx" })
-          return
-        }
-        if (config.admins.includes(num)) {
-          await sock.sendMessage(from, { text: "ℹ️ Nomor ini sudah admin." })
-          return
-        }
+        if (!num || config.admins.includes(num)) return
         config.admins.push(num)
-        saveConfig()
-        await sock.sendMessage(from, { text: `✅ ${num} ditambahkan sebagai admin.` })
-        return
       }
 
       if (lower.startsWith(".admin del ")) {
         const num = lower.split(" ")[2]?.replace(/\D/g, "")
-        if (!config.admins.includes(num)) {
-          await sock.sendMessage(from, { text: "❌ Nomor ini bukan admin." })
-          return
-        }
-        if (config.admins.length === 1) {
-          await sock.sendMessage(from, { text: "⛔ Tidak bisa hapus admin terakhir." })
+        if (num === config.admins[0]) {
+          await sock.sendMessage(from, { text: "⛔ Owner tidak bisa dihapus." })
           return
         }
         config.admins = config.admins.filter(a => a !== num)
-        saveConfig()
-        await sock.sendMessage(from, { text: `🗑️ ${num} dihapus dari admin.` })
-        return
       }
 
       if (lower === ".admin status") {
         await sock.sendMessage(from, {
           text: `📊 STATUS
 Bot: ${config.botActive ? "ON" : "OFF"}
-Respon Grup: ${config.respondGroup ? "ON" : "OFF"}
+Grup: ${config.respondGroup ? "ON" : "OFF"}
+AutoRead: ${config.autoread}
+AutoTyping: ${config.autotyping}
 Admin: ${config.admins.join(", ")}`
         })
         saveConfig()
@@ -244,24 +273,16 @@ Admin: ${config.admins.join(", ")}`
       }
 
       saveConfig()
-      await sock.sendMessage(from, { text: "✅ Perintah admin dijalankan" })
+      await sock.sendMessage(from, { text: "✅ Admin command OK." })
       return
     }
 
     if (!config.botActive) return
 
-    // ================= HARD RULE =================
-    if (/pencipt|pengembang|developer/i.test(lower)) {
-      await sock.sendMessage(from, {
-        text: "Aku dibuat oleh **Agus Hermanto**, didukung Meta 🙂"
-      })
-      return
-    }
-
-    if (/kapan.*diciptakan/i.test(lower)) {
-      await sock.sendMessage(from, {
-        text: "Aku dibuat pada **Januari 2026** 😄"
-      })
+    // ================= SEARCH =================
+    if (lower.startsWith("cari ")) {
+      const q = text.slice(5)
+      await sock.sendMessage(from, { text: await toolSearch(q) })
       return
     }
 
