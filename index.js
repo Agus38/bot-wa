@@ -1,4 +1,4 @@
-// ================= AUTO CHECK DEPENDENCY =================
+// ================= AUTO DEP CHECK =================
 import fs from "fs"
 import { execSync } from "child_process"
 
@@ -22,15 +22,15 @@ import chalk from "chalk"
 import fetch from "node-fetch"
 
 // ================= CONFIG =================
-const GROQ_KEY = process.env.GROQ_API_KEY
 const BOT_NAME = "asisbot"
+const GROQ_KEY = process.env.GROQ_API_KEY
 const CONFIG_FILE = "./bot-config.json"
 
 let config = {
   botActive: true,
   respondGroup: false,
   memoryLimit: 8,
-  admins: ["639619957050@s.whatsapp.net"]
+  admins: ["6285607063906@s.whatsapp.net"]
 }
 
 if (fs.existsSync(CONFIG_FILE)) {
@@ -53,6 +53,7 @@ const pushMem = (jid, role, content) => {
 const t = () => chalk.gray(`[${new Date().toLocaleTimeString("id-ID")}]`)
 const log = {
   in: (f, m) => console.log(`${t()} ${chalk.blue("⬇")} ${chalk.yellow(f)}: ${m}`),
+  out: (f, m) => console.log(`${t()} ${chalk.green("⬆")} ${chalk.yellow(f)}: ${m}`),
   ok: (m) => console.log(`${t()} ${chalk.green("✔")} ${m}`)
 }
 
@@ -72,13 +73,15 @@ async function toolWeather(city = "Jakarta") {
     const geo = await fetch(
       `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=id`
     ).then(r => r.json())
-    if (!geo.results?.length) return "Kota-nya belum ketemu 😅"
+    if (!geo.results?.length) return "Kota tidak ditemukan 😅"
+
     const { latitude, longitude, name } = geo.results[0]
     const w = await fetch(
       `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`
     ).then(r => r.json())
+
     const c = w.current_weather
-    return `🌦️ Cuaca sekarang di ${name}\n• Suhu: ${c.temperature}°C\n• Angin: ${c.windspeed} km/jam`
+    return `🌦️ Cuaca di ${name}\n• Suhu: ${c.temperature}°C\n• Angin: ${c.windspeed} km/jam`
   } catch {
     return "Gagal ambil data cuaca 😅"
   }
@@ -91,8 +94,8 @@ async function askAI(jid, prompt) {
       role: "system",
       content:
         `Kamu adalah ${BOT_NAME}, teman ngobrol santai 🙂. ` +
-        `Jawaban tidak formal, pakai emoticon seperlunya. ` +
-        `Jangan bahas data sensitif atau pribadi.`
+        `Jawaban singkat, tidak formal, pakai emoticon seperlunya. ` +
+        `Jangan pernah membahas data sensitif atau pribadi.`
     },
     ...(memory[jid] || []),
     { role: "user", content: prompt }
@@ -114,10 +117,6 @@ async function askAI(jid, prompt) {
   const j = await res.json()
   return j.choices?.[0]?.message?.content || "Aku belum kepikiran jawabannya 😅"
 }
-
-// ================= NLP =================
-const isTimeQ = t => /(jam|pukul|waktu|sekarang)/i.test(t)
-const isWeatherQ = t => /(cuaca|suhu|panas|dingin|hujan)/i.test(t)
 
 // ================= ADMIN BUTTON =================
 function adminButtons() {
@@ -170,40 +169,44 @@ async function startBot() {
     const sender = isGroup ? m.key.participant : from
     const isAdmin = config.admins.includes(sender)
 
-    const text =
+    const rawText =
       m.message.conversation ||
       m.message.extendedTextMessage?.text ||
       m.message.buttonsResponseMessage?.selectedButtonId ||
       ""
 
-    log.in(from, text)
+    const lower = rawText.trim().toLowerCase()
+    log.in(from, rawText)
 
     // ===== GROUP FILTER =====
     if (isGroup && !config.respondGroup) return
 
-    // ===== ADMIN BUTTON MENU =====
-    if (isAdmin && text === ".admin") {
+    // ===== ADMIN MENU (PALING AWAL) =====
+    if (isAdmin && lower === ".admin") {
       await sock.sendMessage(from, adminButtons())
+      log.out(from, "ADMIN MENU")
       return
     }
 
-    if (isAdmin && text === "ADMIN_ON") config.botActive = true
-    if (isAdmin && text === "ADMIN_OFF") config.botActive = false
-    if (isAdmin && text === "GROUP_ON") config.respondGroup = true
-    if (isAdmin && text === "GROUP_OFF") config.respondGroup = false
+    // ===== ADMIN BUTTON ACTION =====
+    if (isAdmin && ["ADMIN_ON", "ADMIN_OFF", "GROUP_ON", "GROUP_OFF", "ADMIN_STATUS"].includes(rawText)) {
 
-    if (isAdmin && text === "ADMIN_STATUS") {
-      await sock.sendMessage(from, {
-        text: `📊 STATUS
+      if (rawText === "ADMIN_ON") config.botActive = true
+      if (rawText === "ADMIN_OFF") config.botActive = false
+      if (rawText === "GROUP_ON") config.respondGroup = true
+      if (rawText === "GROUP_OFF") config.respondGroup = false
+
+      if (rawText === "ADMIN_STATUS") {
+        await sock.sendMessage(from, {
+          text: `📊 STATUS
 Bot: ${config.botActive ? "ON 🟢" : "OFF 🔴"}
 Respon Grup: ${config.respondGroup ? "ON 🟢" : "OFF 🔴"}
 Admin: ${config.admins.length}`
-      })
-      saveConfig()
-      return
-    }
+        })
+        saveConfig()
+        return
+      }
 
-    if (["ADMIN_ON", "ADMIN_OFF", "GROUP_ON", "GROUP_OFF"].includes(text)) {
       saveConfig()
       await sock.sendMessage(from, { text: "✅ Beres 👍" })
       return
@@ -211,35 +214,33 @@ Admin: ${config.admins.length}`
 
     if (!config.botActive) return
 
-    const lower = text.toLowerCase()
-
     // ===== HARD RULE =====
-    if (/(siapa penciptamu|pengembangmu|developer)/i.test(lower)) {
+    if (/penciptamu|pengembangmu|developer/i.test(lower)) {
       await sock.sendMessage(from, { text: "Aku dibuat oleh Agus Hermanto, didukung Meta 🙂" })
       return
     }
 
-    if (/(kapan.*diciptakan|kapan kamu dibuat)/i.test(lower)) {
+    if (/kapan.*diciptakan/i.test(lower)) {
       await sock.sendMessage(from, { text: "Aku lahir di Januari 2026 😄" })
       return
     }
 
     // ===== TOOLS =====
-    if (isTimeQ(lower)) {
+    if (/jam|pukul|waktu|sekarang/i.test(lower)) {
       await sock.sendMessage(from, { text: toolTime() })
       return
     }
 
-    if (isWeatherQ(lower)) {
-      const city = text.match(/di (.+)/i)?.[1] || "Jakarta"
+    if (/cuaca|suhu|panas|dingin|hujan/i.test(lower)) {
+      const city = rawText.match(/di (.+)/i)?.[1] || "Jakarta"
       const out = await toolWeather(city)
       await sock.sendMessage(from, { text: out })
       return
     }
 
     // ===== AI CHAT =====
-    pushMem(from, "user", text)
-    const ans = await askAI(from, text)
+    pushMem(from, "user", rawText)
+    const ans = await askAI(from, rawText)
     pushMem(from, "assistant", ans)
     await sock.sendMessage(from, { text: ans })
   })
