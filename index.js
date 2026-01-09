@@ -21,7 +21,7 @@ let config = {
   notifyNonAdmin: true,
   autoread: false,
   autotyping: false,
-  admins: [] // admin[0] = owner
+  admins: [] // admins[0] = owner
 }
 
 if (fs.existsSync(CONFIG_FILE)) {
@@ -45,12 +45,29 @@ function aiNotSure(text) {
   if (!text) return true
   const t = text.toLowerCase()
   return (
-    t.length < 15 ||
+    t.length < 20 ||
     t.includes("tidak tahu") ||
     t.includes("kurang yakin") ||
     t.includes("belum tahu") ||
-    t.includes("maaf") ||
-    t.includes("aku tidak")
+    t.includes("maaf")
+  )
+}
+
+// REALTIME / DYNAMIC QUERY → WAJIB SEARCH
+function isRealtimeQuery(text) {
+  const t = text.toLowerCase()
+  return (
+    t.includes("dolar") ||
+    t.includes("usd") ||
+    t.includes("kurs") ||
+    t.includes("rupiah") ||
+    t.includes("harga") ||
+    t.includes("hari ini") ||
+    t.includes("sekarang") ||
+    t.includes("bitcoin") ||
+    t.includes("btc") ||
+    t.includes("emas") ||
+    t.includes("bbm")
   )
 }
 
@@ -88,11 +105,11 @@ async function toolWeather(city) {
 • Suhu: ${c.temperature}°C
 • Angin: ${c.windspeed} km/jam`
   } catch {
-    return "❌ Gagal ambil cuaca"
+    return "❌ Gagal mengambil data cuaca"
   }
 }
 
-// ===== SEARCH INTERNET (DuckDuckGo) =====
+// SEARCH INTERNET (DuckDuckGo – gratis)
 async function toolSearch(query) {
   try {
     const res = await fetch(
@@ -105,7 +122,7 @@ async function toolSearch(query) {
     if (j.AbstractText) return j.AbstractText
     if (j.RelatedTopics?.length) return j.RelatedTopics[0].Text
 
-    return "Tidak ditemukan informasi yang relevan."
+    return "Tidak ditemukan informasi relevan."
   } catch {
     return "Gagal mencari informasi dari internet."
   }
@@ -118,8 +135,7 @@ async function askAI(jid, prompt) {
       role: "system",
       content:
         "Kamu adalah asisbot, teman ngobrol santai 🙂. " +
-        "Jawaban singkat, tidak formal, emoticon seperlunya. " +
-        "Jika ragu, jawab sejujurnya singkat."
+        "Jawaban singkat, tidak formal, emoticon seperlunya."
     },
     ...(memory[jid] || []),
     { role: "user", content: prompt }
@@ -147,7 +163,6 @@ const rl = readline.createInterface({ input: process.stdin, output: process.stdo
 
 async function startBot() {
   const startTime = Date.now()
-
   const { state, saveCreds } = await useMultiFileAuthState("./session")
   const { version } = await fetchLatestBaileysVersion()
 
@@ -238,37 +253,31 @@ async function startBot() {
       }
 
       if (lower === ".admin autoread on") {
-        config.autoread = true
-        saveConfig()
+        config.autoread = true; saveConfig()
         await sock.sendMessage(from, { text: "📖 Auto-read diaktifkan." })
         return
       }
 
       if (lower === ".admin autoread off") {
-        config.autoread = false
-        saveConfig()
+        config.autoread = false; saveConfig()
         await sock.sendMessage(from, { text: "📖 Auto-read dimatikan." })
         return
       }
 
       if (lower === ".admin autotyping on") {
-        config.autotyping = true
-        saveConfig()
+        config.autotyping = true; saveConfig()
         await sock.sendMessage(from, { text: "⌨️ Auto-typing diaktifkan." })
         return
       }
 
       if (lower === ".admin autotyping off") {
-        config.autotyping = false
-        saveConfig()
+        config.autotyping = false; saveConfig()
         await sock.sendMessage(from, { text: "⌨️ Auto-typing dimatikan." })
         return
       }
 
       if (lower === ".admin list owner") {
-        await sock.sendMessage(from, {
-          text: `👑 OWNER:\n${config.admins[0]}`
-        })
+        await sock.sendMessage(from, { text: `👑 OWNER:\n${config.admins[0]}` })
         return
       }
 
@@ -290,40 +299,50 @@ Admin: ${config.admins.join(", ")}`
 
     if (!config.botActive) return
 
-    // ===== SEARCH MANUAL =====
-    if (lower.startsWith("cari ")) {
-      const q = text.slice(5)
-      await sock.sendMessage(from, {
-        text: `🔍 ${await toolSearch(q)}`
-      })
+    // ===== WEATHER (SMART + ASK CITY) =====
+    if (/cuaca|suhu/i.test(lower)) {
+      const cityMatch =
+        lower.match(/di\s+([a-z\s]+)/i) ||
+        lower.match(/cuaca\s+([a-z\s]+)/i)
+
+      const city = cityMatch ? cityMatch[1].trim() : null
+
+      if (city && city.length >= 3) {
+        intent[from] = null
+        await sock.sendMessage(from, { text: await toolWeather(city) })
+        return
+      }
+
+      intent[from] = "ask_weather_city"
+      await sock.sendMessage(from, { text: "📍 Di kota mana?" })
       return
     }
 
-    // ===== TOOLS =====
-    if (/jam|waktu|tanggal|sekarang/i.test(lower)) {
+    if (intent[from] === "ask_weather_city") {
+      if (/^[a-z\s]+$/i.test(text)) {
+        await sock.sendMessage(from, { text: await toolWeather(text.trim()) })
+        intent[from] = null
+        return
+      }
+    }
+
+    // ===== TIME =====
+    if (/jam|waktu|tanggal/i.test(lower)) {
       await sock.sendMessage(from, { text: toolTime() })
       return
     }
 
-    if (/cuaca|suhu/i.test(lower)) {
-      intent[from] = "weather"
-      await sock.sendMessage(from, { text: await toolWeather("Jakarta") })
-      return
-    }
-
-    if (intent[from] === "weather" && /^[a-z\s]+$/i.test(text)) {
-      await sock.sendMessage(from, { text: await toolWeather(text) })
-      intent[from] = null
-      return
-    }
-
-    // ===== AI + AUTO SEARCH FALLBACK =====
+    // ===== AI + AUTO SEARCH =====
     remember(from, "user", text)
-    let ans = await askAI(from, text)
 
-    if (aiNotSure(ans)) {
-      const result = await toolSearch(text)
-      ans = `🔍 Aku cari dulu ya...\n\n${result}`
+    let ans = ""
+    if (isRealtimeQuery(text)) {
+      ans = `🔍 Aku cek info terbaru ya...\n\n${await toolSearch(text)}`
+    } else {
+      ans = await askAI(from, text)
+      if (aiNotSure(ans)) {
+        ans = `🔍 Aku cari dulu ya...\n\n${await toolSearch(text)}`
+      }
     }
 
     remember(from, "assistant", ans)
