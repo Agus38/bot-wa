@@ -30,7 +30,7 @@ let config = {
   botActive: true,
   respondGroup: false,
   memoryLimit: 8,
-  admins: ["6285607063906@s.whatsapp.net"]
+  admins: ["639619957050@s.whatsapp.net"]
 }
 
 if (fs.existsSync(CONFIG_FILE)) {
