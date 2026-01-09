@@ -1,4 +1,4 @@
-// ================= BASIC SETUP =================
+// ================= CORE =================
 import fs from "fs"
 import fetch from "node-fetch"
 import "dotenv/config"
@@ -29,7 +29,7 @@ const saveConfig = () =>
 
 // ================= MEMORY =================
 const memory = {}
-const context = {} // untuk intent (cuaca, dll)
+const intent = {}
 
 function remember(jid, role, text) {
   if (!memory[jid]) memory[jid] = []
@@ -38,7 +38,7 @@ function remember(jid, role, text) {
 }
 
 // ================= TOOLS =================
-function getTime() {
+function toolTime() {
   const d = new Date()
   return `🕒 ${d.toLocaleDateString("id-ID", {
     weekday: "long",
@@ -51,16 +51,15 @@ function getTime() {
   })}`
 }
 
-async function getWeather(city) {
+async function toolWeather(city) {
   try {
-    const q = `${city}, Indonesia`
     const geo = await fetch(
       `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
-        q
-      )}&count=1&language=id`
+        city + ", Indonesia"
+      )}&count=1`
     ).then(r => r.json())
 
-    if (!geo.results?.length) return `❌ Kota "${city}" tidak ditemukan.`
+    if (!geo.results?.length) return `❌ Kota "${city}" tidak ditemukan`
 
     const { latitude, longitude, name } = geo.results[0]
     const w = await fetch(
@@ -68,11 +67,11 @@ async function getWeather(city) {
     ).then(r => r.json())
 
     const c = w.current_weather
-    return `🌦️ Cuaca saat ini di ${name}
+    return `🌦️ Cuaca di ${name}
 • Suhu: ${c.temperature}°C
 • Angin: ${c.windspeed} km/jam`
   } catch {
-    return "❌ Gagal mengambil data cuaca."
+    return "❌ Gagal ambil cuaca"
   }
 }
 
@@ -82,9 +81,9 @@ async function askAI(jid, prompt) {
     {
       role: "system",
       content:
-        "Kamu adalah asisbot, teman dekat yang santai 🙂. " +
-        "Jawab singkat, tidak formal, emoticon seperlunya. " +
-        "Jangan pernah membahas data sensitif."
+        "Kamu adalah asisbot, teman ngobrol santai 🙂. " +
+        "Jawaban tidak formal, singkat, emoticon seperlunya. " +
+        "Jangan pernah membahas pencipta, perusahaan, atau data sensitif."
     },
     ...(memory[jid] || []),
     { role: "user", content: prompt }
@@ -145,65 +144,86 @@ async function startBot() {
 
     if (isGroup && !config.respondGroup) return
 
-    const text =
+    const raw =
       m.message.conversation ||
       m.message.extendedTextMessage?.text ||
       ""
 
+    const text = raw.trim()
     const lower = text.toLowerCase()
 
-    // ===== ADMIN MENU (TEXT) =====
-    if (isAdmin && lower === ".admin") {
-      await sock.sendMessage(from, {
-        text: `🛠️ ADMIN MENU
+    // ================= COMMAND ROUTER =================
+    if (text.startsWith(".")) {
+      if (!isAdmin) return
+
+      if (lower === ".admin") {
+        await sock.sendMessage(from, {
+          text: `🛠️ ADMIN MENU
 .admin on
 .admin off
 .admin group on
 .admin group off
 .admin status`
-      })
-      return
-    }
+        })
+        return
+      }
 
-    if (isAdmin && lower === ".admin on") config.botActive = true
-    if (isAdmin && lower === ".admin off") config.botActive = false
-    if (isAdmin && lower === ".admin group on") config.respondGroup = true
-    if (isAdmin && lower === ".admin group off") config.respondGroup = false
+      if (lower === ".admin on") config.botActive = true
+      if (lower === ".admin off") config.botActive = false
+      if (lower === ".admin group on") config.respondGroup = true
+      if (lower === ".admin group off") config.respondGroup = false
 
-    if (isAdmin && lower === ".admin status") {
-      await sock.sendMessage(from, {
-        text: `📊 STATUS
+      if (lower === ".admin status") {
+        await sock.sendMessage(from, {
+          text: `📊 STATUS
 Bot: ${config.botActive ? "ON" : "OFF"}
-Respon Grup: ${config.respondGroup ? "ON" : "OFF"}
-Admin: ${config.admins.length}`
-      })
+Respon Grup: ${config.respondGroup ? "ON" : "OFF"}`
+        })
+        saveConfig()
+        return
+      }
+
       saveConfig()
+      await sock.sendMessage(from, { text: "✅ Perintah admin dijalankan" })
       return
     }
 
     if (!config.botActive) return
 
-    // ===== TIME =====
+    // ================= HARD RULE =================
+    if (/pencipt|pengembang|developer/i.test(lower)) {
+      await sock.sendMessage(from, {
+        text: "Aku dibuat oleh **Agus Hermanto**, didukung Meta 🙂"
+      })
+      return
+    }
+
+    if (/kapan.*diciptakan|kapan kamu dibuat/i.test(lower)) {
+      await sock.sendMessage(from, {
+        text: "Aku dibuat pada **Januari 2026** 😄"
+      })
+      return
+    }
+
+    // ================= TOOLS =================
     if (/jam|waktu|tanggal|sekarang/i.test(lower)) {
-      await sock.sendMessage(from, { text: getTime() })
+      await sock.sendMessage(from, { text: toolTime() })
       return
     }
 
-    // ===== WEATHER =====
     if (/cuaca|suhu/i.test(lower)) {
-      context[from] = "weather"
-      await sock.sendMessage(from, { text: await getWeather("Jakarta") })
+      intent[from] = "weather"
+      await sock.sendMessage(from, { text: await toolWeather("Jakarta") })
       return
     }
 
-    // lanjutan konteks cuaca
-    if (context[from] === "weather" && /^[a-z\s]+$/i.test(text)) {
-      await sock.sendMessage(from, { text: await getWeather(text) })
-      context[from] = null
+    if (intent[from] === "weather" && /^[a-z\s]+$/i.test(text)) {
+      await sock.sendMessage(from, { text: await toolWeather(text) })
+      intent[from] = null
       return
     }
 
-    // ===== AI =====
+    // ================= AI (LAST) =================
     remember(from, "user", text)
     const ans = await askAI(from, text)
     remember(from, "assistant", ans)
