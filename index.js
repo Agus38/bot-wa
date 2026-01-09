@@ -19,7 +19,7 @@ let config = {
   botActive: true,
   respondGroup: false,
   notifyNonAdmin: true,
-  admins: [] // auto add admin pertama
+  admins: [] // admin diisi via .claim
 }
 
 if (fs.existsSync(CONFIG_FILE)) {
@@ -31,7 +31,8 @@ const saveConfig = () =>
 // ================= MEMORY =================
 const memory = {}
 const intent = {}
-const remember = (jid, role, text) => {
+
+function remember(jid, role, text) {
   if (!memory[jid]) memory[jid] = []
   memory[jid].push({ role, content: text })
   if (memory[jid].length > 6) memory[jid].shift()
@@ -46,7 +47,9 @@ function toolTime() {
     month: "long",
     year: "numeric",
     timeZone: "Asia/Jakarta"
-  })}\n⏰ Jam ${d.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}`
+  })}\n⏰ Jam ${d.toLocaleTimeString("id-ID", {
+    timeZone: "Asia/Jakarta"
+  })}`
 }
 
 async function toolWeather(city) {
@@ -81,7 +84,7 @@ async function askAI(jid, prompt) {
       content:
         "Kamu adalah asisbot, teman ngobrol santai 🙂. " +
         "Jawaban singkat, tidak formal, emoticon seperlunya. " +
-        "Jangan bahas pencipta, perusahaan, atau data sensitif."
+        "Jangan pernah membahas pencipta, perusahaan, atau data sensitif."
     },
     ...(memory[jid] || []),
     { role: "user", content: prompt }
@@ -121,14 +124,6 @@ async function startBot() {
     browser: ["Ubuntu", "Chrome", "120"]
   })
 
-  // ===== AUTO ADD ADMIN PERTAMA =====
-  if (state.creds.me && config.admins.length === 0) {
-    const num = state.creds.me.id.split("@")[0]
-    config.admins.push(num)
-    saveConfig()
-    console.log(`[ADMIN AUTO] ${num} jadi admin pertama`)
-  }
-
   if (!state.creds.registered) {
     rl.question("Nomor WA (62xxxx): ", async n => {
       const code = await sock.requestPairingCode(n.replace(/\D/g, ""))
@@ -159,9 +154,25 @@ async function startBot() {
     const text = raw.trim()
     const lower = text.toLowerCase()
 
+    // ================= CLAIM OWNER =================
+    if (lower === ".claim") {
+      if (config.admins.length === 0) {
+        config.admins.push(senderNumber)
+        saveConfig()
+        console.log(`[OWNER CLAIMED] ${senderNumber}`)
+        await sock.sendMessage(from, {
+          text: "✅ Kamu sekarang ADMIN pertama (OWNER)."
+        })
+      } else {
+        await sock.sendMessage(from, {
+          text: "⛔ Owner sudah ditetapkan."
+        })
+      }
+      return
+    }
+
     // ================= COMMAND ROUTER =================
     if (text.startsWith(".")) {
-
       if (!isAdmin) {
         console.log(`[ADMIN DENIED] ${senderNumber}: ${text}`)
         if (config.notifyNonAdmin) {
@@ -170,7 +181,6 @@ async function startBot() {
         return
       }
 
-      // ===== MENU =====
       if (lower === ".admin") {
         await sock.sendMessage(from, {
           text: `🛠️ ADMIN MENU
@@ -185,7 +195,11 @@ async function startBot() {
         return
       }
 
-      // ===== ADD ADMIN =====
+      if (lower === ".admin on") config.botActive = true
+      if (lower === ".admin off") config.botActive = false
+      if (lower === ".admin group on") config.respondGroup = true
+      if (lower === ".admin group off") config.respondGroup = false
+
       if (lower.startsWith(".admin add ")) {
         const num = lower.split(" ")[2]?.replace(/\D/g, "")
         if (!num) {
@@ -198,38 +212,25 @@ async function startBot() {
         }
         config.admins.push(num)
         saveConfig()
-        console.log(`[ADMIN ADD] ${senderNumber} menambahkan ${num}`)
         await sock.sendMessage(from, { text: `✅ ${num} ditambahkan sebagai admin.` })
         return
       }
 
-      // ===== DEL ADMIN =====
       if (lower.startsWith(".admin del ")) {
         const num = lower.split(" ")[2]?.replace(/\D/g, "")
-        if (!num) {
-          await sock.sendMessage(from, { text: "❌ Format salah. Contoh: .admin del 628xxx" })
-          return
-        }
         if (!config.admins.includes(num)) {
           await sock.sendMessage(from, { text: "❌ Nomor ini bukan admin." })
           return
         }
         if (config.admins.length === 1) {
-          await sock.sendMessage(from, { text: "⛔ Tidak bisa menghapus admin terakhir." })
+          await sock.sendMessage(from, { text: "⛔ Tidak bisa hapus admin terakhir." })
           return
         }
         config.admins = config.admins.filter(a => a !== num)
         saveConfig()
-        console.log(`[ADMIN DEL] ${senderNumber} menghapus ${num}`)
         await sock.sendMessage(from, { text: `🗑️ ${num} dihapus dari admin.` })
         return
       }
-
-      // ===== BASIC ADMIN =====
-      if (lower === ".admin on") config.botActive = true
-      if (lower === ".admin off") config.botActive = false
-      if (lower === ".admin group on") config.respondGroup = true
-      if (lower === ".admin group off") config.respondGroup = false
 
       if (lower === ".admin status") {
         await sock.sendMessage(from, {
