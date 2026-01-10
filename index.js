@@ -13,14 +13,15 @@ import readline from "readline"
 
 // ================= CONFIG =================
 const BOT_NAME = "asisbot"
-const GROQ_KEY = process.env.GROQ_API_KEY
 const CONFIG_FILE = "./bot-config.json"
 
 let config = {
   botActive: true,
   replyActive: true,
-  respondGroup: false,
-  admins: []
+  respondGroup: false, // 🔥 default OFF
+  autoread: false,
+  autotyping: false,
+  admins: [] // admins[0] = owner
 }
 
 if (fs.existsSync(CONFIG_FILE)) {
@@ -29,7 +30,14 @@ if (fs.existsSync(CONFIG_FILE)) {
 const saveConfig = () =>
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2))
 
-// ================= TOOL HELPERS =================
+// ================= UTIL =================
+function isInvalidCity(word) {
+  return ["sekarang", "saat ini", "hari ini", "ini", "tadi"].includes(
+    word.trim()
+  )
+}
+
+// ================= TOOLS =================
 function get_current_time() {
   const d = new Date()
   return `🕒 ${d.toLocaleDateString("id-ID", {
@@ -38,33 +46,38 @@ function get_current_time() {
     month: "long",
     year: "numeric",
     timeZone: "Asia/Jakarta"
-  })}\n⏰ ${d.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}`
+  })}\n⏰ ${d.toLocaleTimeString("id-ID", {
+    timeZone: "Asia/Jakarta"
+  })}`
 }
 
-async function web_search(query, num_results = 5) {
-  const q = `${query} site:id`
-  const res = await fetch(
-    `https://api.duckduckgo.com/?q=${encodeURIComponent(
-      q
-    )}&format=json&kl=id-id&no_html=1`
-  )
-  const j = await res.json()
-  if (j.AbstractText) return j.AbstractText
-  if (j.RelatedTopics?.length)
-    return j.RelatedTopics.slice(0, num_results).map(v => `• ${v.Text}`).join("\n")
-  return "😅 Aku nggak nemu hasil yang relevan."
+async function web_search(query) {
+  try {
+    const q = `${query} site:id`
+    const res = await fetch(
+      `https://api.duckduckgo.com/?q=${encodeURIComponent(
+        q
+      )}&format=json&kl=id-id&no_html=1`
+    )
+    const j = await res.json()
+    if (j.AbstractText) return j.AbstractText
+    if (j.RelatedTopics?.length) return j.RelatedTopics[0].Text
+    return "😅 Aku belum nemu info yang pas."
+  } catch {
+    return "😅 Lagi ada kendala pas nyari info."
+  }
 }
 
-async function get_weather(location, date = null) {
+async function get_weather(city) {
   try {
     const geo = await fetch(
       `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
-        location + ", Indonesia"
+        city + ", Indonesia"
       )}&count=1&language=id`
     ).then(r => r.json())
 
     if (!geo.results?.length)
-      return `😅 Aku nggak nemu kota *${location}*.`
+      return `😅 Aku nggak nemu kota *${city}*.`
 
     const { latitude, longitude, name } = geo.results[0]
     const w = await fetch(
@@ -80,17 +93,12 @@ async function get_weather(location, date = null) {
   }
 }
 
-function calculate_math(expression) {
+function calculate_math(expr) {
   try {
-    return `🧮 Hasilnya: ${evaluate(expression)}`
+    return `🧮 Hasilnya: ${evaluate(expr)}`
   } catch {
-    return "😅 Rumusnya kayaknya salah."
+    return "😅 Hitungannya kayaknya salah."
   }
-}
-
-async function analyze_image(image) {
-  // placeholder aman (vision API optional)
-  return "🖼️ Aku sudah terima gambarnya. Untuk analisis visual lanjut, aktifkan Vision API."
 }
 
 // ================= BOT =================
@@ -125,31 +133,113 @@ async function startBot() {
     if (!m?.message || m.key.fromMe) return
 
     const from = m.key.remoteJid
-    if (from.endsWith("@g.us") && !config.respondGroup) return
+    const isGroup = from.endsWith("@g.us")
+    if (isGroup && !config.respondGroup) return
+
+    const senderJid = m.key.participant || from
+    const sender = senderJid.split("@")[0]
+    const isAdmin = config.admins.includes(sender)
 
     const text =
       m.message.conversation ||
       m.message.extendedTextMessage?.text ||
       ""
+    const lower = text.toLowerCase().trim()
 
-    const lower = text.toLowerCase()
+    if (config.autoread) await sock.readMessages([m.key])
+    if (config.autotyping) await sock.sendPresenceUpdate("composing", from)
+
+    // ===== CLAIM OWNER =====
+    if (lower === ".claim") {
+      if (config.admins.length === 0) {
+        config.admins.push(sender)
+        saveConfig()
+        await sock.sendMessage(from, { text: "🎉 Kamu sekarang owner." })
+      } else {
+        await sock.sendMessage(from, { text: "Owner sudah ada 😅" })
+      }
+      return
+    }
+
+    // ===== MENU =====
+    if (lower === ".menu" && isAdmin) {
+      await sock.sendMessage(from, {
+        text: `🛠️ MENU ADMIN
+.reply on/off
+.autoread on/off
+.autotyping on/off
+.group on/off
+.owner
+.status`
+      })
+      return
+    }
+
+    // ===== ADMIN COMMANDS =====
+    if (!isAdmin && lower.startsWith(".")) return
+
+    if (lower === ".reply on") config.replyActive = true
+    if (lower === ".reply off") config.replyActive = false
+
+    if (lower === ".autoread on") config.autoread = true
+    if (lower === ".autoread off") config.autoread = false
+
+    if (lower === ".autotyping on") config.autotyping = true
+    if (lower === ".autotyping off") config.autotyping = false
+
+    if (lower === ".group on") config.respondGroup = true
+    if (lower === ".group off") config.respondGroup = false
+
+    if (
+      lower.startsWith(".reply") ||
+      lower.startsWith(".autoread") ||
+      lower.startsWith(".autotyping") ||
+      lower.startsWith(".group")
+    ) {
+      saveConfig()
+      await sock.sendMessage(from, { text: "✅ Oke, sudah diatur." })
+      return
+    }
+
+    if (lower === ".owner" && isAdmin) {
+      await sock.sendMessage(from, { text: `👑 Owner: ${config.admins[0]}` })
+      return
+    }
+
+    if (lower === ".status" && isAdmin) {
+      await sock.sendMessage(from, {
+        text: `📊 STATUS
+Reply: ${config.replyActive}
+Group: ${config.respondGroup}
+AutoRead: ${config.autoread}
+AutoTyping: ${config.autotyping}
+Admin: ${config.admins.join(", ")}`
+      })
+      return
+    }
 
     if (!config.botActive || !config.replyActive) return
 
-    // ===== AUTO TOOL SELECTION =====
-
+    // ===== AUTO TOOLS =====
     if (/jam|tanggal|waktu/i.test(lower)) {
       await sock.sendMessage(from, { text: get_current_time() })
       return
     }
 
     if (/cuaca|perkiraan/i.test(lower)) {
-      const city = lower.replace(/.*di\s+/i, "").trim()
-      await sock.sendMessage(from, { text: await get_weather(city) })
+      const match = lower.match(/di\s+([a-z\s]+)/i)
+      let city = match ? match[1].trim() : null
+      if (city && isInvalidCity(city)) city = null
+
+      if (city) {
+        await sock.sendMessage(from, { text: await get_weather(city) })
+      } else {
+        await sock.sendMessage(from, { text: "📍 Di kota mana?" })
+      }
       return
     }
 
-    if (/hitung|berapa hasil|=|\+|\-|\*|\//.test(lower)) {
+    if (/hitung|=|\+|\-|\*|\//.test(lower)) {
       await sock.sendMessage(from, {
         text: calculate_math(text.replace(/hitung/gi, "").trim())
       })
@@ -157,22 +247,13 @@ async function startBot() {
     }
 
     if (lower.startsWith("cari ")) {
-      await sock.sendMessage(from, {
-        text: await web_search(text.slice(5))
-      })
+      await sock.sendMessage(from, { text: await web_search(text.slice(5)) })
       return
     }
 
-    if (m.message.imageMessage) {
-      await sock.sendMessage(from, {
-        text: await analyze_image("uploaded_file")
-      })
-      return
-    }
-
-    // ===== FALLBACK AI (CHITCHAT) =====
+    // ===== FALLBACK =====
     await sock.sendMessage(from, {
-      text: "🙂 Aku ngerti. Tapi buat info spesifik, coba tanyakan lebih jelas ya."
+      text: "🙂 Oke, tapi coba jelasin dikit lagi ya."
     })
   })
 }
