@@ -16,8 +16,30 @@ let config = JSON.parse(fs.readFileSync(CONFIG_FILE))
 const saveConfig = () =>
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2))
 
+// ================= MEMORY =================
+const memory = {} // per user
+
+function remember(jid, role, content) {
+  if (!memory[jid]) memory[jid] = []
+  memory[jid].push({ role, content })
+  if (memory[jid].length > 6) memory[jid].shift()
+}
+
 // ================= AI (GROQ) =================
-async function askAI(prompt) {
+async function askAI(jid, prompt) {
+  remember(jid, "user", prompt)
+
+  const messages = [
+    {
+      role: "system",
+      content:
+        "Kamu adalah asisbot, teman ngobrol santai. " +
+        "Jawab pakai Bahasa Indonesia yang ringan, nggak formal. " +
+        "Pakai emoticon secukupnya 🙂. Jangan terlalu panjang."
+    },
+    ...(memory[jid] || [])
+  ]
+
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -26,25 +48,26 @@ async function askAI(prompt) {
     },
     body: JSON.stringify({
       model: "llama-3.1-8b-instant",
-      messages: [
-        {
-          role: "system",
-          content:
-            "Kamu adalah asisbot, teman ngobrol santai. " +
-            "Jawab pakai Bahasa Indonesia yang ringan, nggak formal."
-        },
-        { role: "user", content: prompt }
-      ],
+      messages,
       temperature: 0.7
     })
   })
 
   const j = await res.json()
-  return j.choices?.[0]?.message?.content || null
+  const reply = j.choices?.[0]?.message?.content
+  if (reply) remember(jid, "assistant", reply)
+  return reply
 }
 
-// ================= TOOLS =================
-const get_current_time = () => {
+// ================= UTIL =================
+function cleanCity(text) {
+  return text
+    .replace(/(saat ini|sekarang|hari ini|dong|ya)/gi, "")
+    .replace(/[^a-z\s]/gi, "")
+    .trim()
+}
+
+function get_current_time() {
   const d = new Date()
   return `🕒 ${d.toLocaleDateString("id-ID", {
     weekday: "long",
@@ -55,24 +78,16 @@ const get_current_time = () => {
   })}\n⏰ ${d.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}`
 }
 
-const web_search = async q => {
-  const res = await fetch(
-    `https://api.duckduckgo.com/?q=${encodeURIComponent(
-      q + " site:id"
-    )}&format=json&kl=id-id&no_html=1`
-  )
-  const j = await res.json()
-  return j.AbstractText || "😅 Aku belum nemu info yang pas."
-}
-
-const get_weather = async city => {
+// ================= TOOLS =================
+async function get_weather(city) {
   const geo = await fetch(
     `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
       city + ", Indonesia"
-    )}&count=1`
+    )}&count=1&language=id`
   ).then(r => r.json())
 
-  if (!geo.results?.length) return "😅 Kotanya nggak ketemu."
+  if (!geo.results?.length)
+    return `😅 Aku nggak nemu kota *${city}*.`
 
   const { latitude, longitude, name } = geo.results[0]
   const w = await fetch(
@@ -80,7 +95,7 @@ const get_weather = async city => {
   ).then(r => r.json())
 
   const c = w.current_weather
-  return `🌦️ Cuaca di *${name}*
+  return `🌦️ Cuaca di *${name}*:
 • Suhu: ${c.temperature}°C
 • Angin: ${c.windspeed} km/jam`
 }
@@ -127,19 +142,9 @@ async function startBot() {
       m.message.conversation ||
       m.message.extendedTextMessage?.text ||
       ""
-    const lower = text.toLowerCase().trim()
+    const lower = text.toLowerCase()
 
-    // ===== CLAIM OWNER =====
-    if (lower === ".claim") {
-      if (config.admins.length === 0) {
-        config.admins.push(sender)
-        saveConfig()
-        await sock.sendMessage(from, { text: "🎉 Kamu sekarang owner." })
-      }
-      return
-    }
-
-    // ===== MENU =====
+    // ===== ADMIN MENU (ringkas) =====
     if (lower === ".menu" && isAdmin) {
       await sock.sendMessage(from, {
         text: `🛠️ MENU
@@ -153,7 +158,6 @@ async function startBot() {
       return
     }
 
-    // ===== ADMIN SHORT COMMAND =====
     if (isAdmin && lower.startsWith(".")) {
       if (lower === ".group on") config.respondGroup = true
       if (lower === ".group off") config.respondGroup = false
@@ -163,26 +167,34 @@ async function startBot() {
       if (lower === ".autoread off") config.autoread = false
       if (lower === ".autotyping on") config.autotyping = true
       if (lower === ".autotyping off") config.autotyping = false
-
       saveConfig()
-      await sock.sendMessage(from, { text: "✅ Oke, sudah diatur." })
+      await sock.sendMessage(from, { text: "✅ Siap, sudah diatur." })
       return
     }
 
     if (!config.botActive || !config.replyActive) return
 
-    // ===== TOOLS AUTO =====
+    // ===== TIME =====
     if (/jam|tanggal|waktu/i.test(lower)) {
       await sock.sendMessage(from, { text: get_current_time() })
       return
     }
 
-    if (/cuaca/i.test(lower)) {
-      const city = lower.replace(/.*di\s+/i, "")
-      await sock.sendMessage(from, { text: await get_weather(city) })
+    // ===== WEATHER (FIXED) =====
+    if (/cuaca|suhu/i.test(lower)) {
+      const match = lower.match(/di\s+([a-z\s]+)/i)
+      const rawCity = match ? match[1] : lower.replace(/cuaca|suhu/gi, "")
+      const city = cleanCity(rawCity)
+
+      if (city.length < 3) {
+        await sock.sendMessage(from, { text: "📍 Di kota mana?" })
+      } else {
+        await sock.sendMessage(from, { text: await get_weather(city) })
+      }
       return
     }
 
+    // ===== MATH =====
     if (/hitung|=|\+|\-|\*|\//.test(lower)) {
       await sock.sendMessage(from, {
         text: `🧮 ${evaluate(text.replace(/hitung/gi, ""))}`
@@ -190,13 +202,8 @@ async function startBot() {
       return
     }
 
-    if (lower.startsWith("cari ")) {
-      await sock.sendMessage(from, { text: await web_search(text.slice(5)) })
-      return
-    }
-
-    // ===== AI FALLBACK (INI YANG SEBELUMNYA TIDAK ADA) =====
-    const aiReply = await askAI(text)
+    // ===== AI CHAT (WITH MEMORY) =====
+    const aiReply = await askAI(from, text)
     await sock.sendMessage(from, {
       text: aiReply || "😅 Lagi error dikit, coba ulangi ya."
     })
