@@ -1,8 +1,34 @@
-// ================= CORE =================
+// ================= AUTO DEPENDENCY CHECK =================
+import { execSync } from "child_process"
 import fs from "fs"
+
+const requiredDeps = [
+  "@whiskeysockets/baileys",
+  "node-fetch",
+  "pino",
+  "dotenv",
+  "mathjs"
+]
+
+console.log("🔍 Mengecek dependency...\n")
+
+for (const dep of requiredDeps) {
+  try {
+    require.resolve(dep)
+    console.log(`✅ ${dep}`)
+  } catch {
+    console.log(`⬇️  ${dep} belum ada, menginstall...`)
+    execSync(`npm install ${dep}`, { stdio: "inherit" })
+    console.log(`✅ ${dep} terpasang`)
+  }
+}
+
+console.log("\n🚀 Semua dependency siap!\n")
+
+// ================= CORE =================
 import fetch from "node-fetch"
-import "dotenv/config"
 import { evaluate } from "mathjs"
+import "dotenv/config"
 import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
@@ -18,15 +44,16 @@ const CONFIG_FILE = "./bot-config.json"
 let config = {
   botActive: true,
   replyActive: true,
-  respondGroup: false, // 🔥 default OFF
+  respondGroup: false,
   autoread: false,
   autotyping: false,
-  admins: [] // admins[0] = owner
+  admins: []
 }
 
 if (fs.existsSync(CONFIG_FILE)) {
   config = { ...config, ...JSON.parse(fs.readFileSync(CONFIG_FILE)) }
 }
+
 const saveConfig = () =>
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2))
 
@@ -121,7 +148,7 @@ async function startBot() {
   if (!state.creds.registered) {
     rl.question("Nomor WA (62xxxx): ", async n => {
       const code = await sock.requestPairingCode(n.replace(/\D/g, ""))
-      console.log("PAIRING:", code)
+      console.log("🔐 Pairing Code:", code)
       rl.close()
     })
   }
@@ -149,19 +176,7 @@ async function startBot() {
     if (config.autoread) await sock.readMessages([m.key])
     if (config.autotyping) await sock.sendPresenceUpdate("composing", from)
 
-    // ===== CLAIM OWNER =====
-    if (lower === ".claim") {
-      if (config.admins.length === 0) {
-        config.admins.push(sender)
-        saveConfig()
-        await sock.sendMessage(from, { text: "🎉 Kamu sekarang owner." })
-      } else {
-        await sock.sendMessage(from, { text: "Owner sudah ada 😅" })
-      }
-      return
-    }
-
-    // ===== MENU =====
+    // ===== MENU ADMIN =====
     if (lower === ".menu" && isAdmin) {
       await sock.sendMessage(from, {
         text: `🛠️ MENU ADMIN
@@ -175,52 +190,9 @@ async function startBot() {
       return
     }
 
-    // ===== ADMIN COMMANDS =====
-    if (!isAdmin && lower.startsWith(".")) return
-
-    if (lower === ".reply on") config.replyActive = true
-    if (lower === ".reply off") config.replyActive = false
-
-    if (lower === ".autoread on") config.autoread = true
-    if (lower === ".autoread off") config.autoread = false
-
-    if (lower === ".autotyping on") config.autotyping = true
-    if (lower === ".autotyping off") config.autotyping = false
-
-    if (lower === ".group on") config.respondGroup = true
-    if (lower === ".group off") config.respondGroup = false
-
-    if (
-      lower.startsWith(".reply") ||
-      lower.startsWith(".autoread") ||
-      lower.startsWith(".autotyping") ||
-      lower.startsWith(".group")
-    ) {
-      saveConfig()
-      await sock.sendMessage(from, { text: "✅ Oke, sudah diatur." })
-      return
-    }
-
-    if (lower === ".owner" && isAdmin) {
-      await sock.sendMessage(from, { text: `👑 Owner: ${config.admins[0]}` })
-      return
-    }
-
-    if (lower === ".status" && isAdmin) {
-      await sock.sendMessage(from, {
-        text: `📊 STATUS
-Reply: ${config.replyActive}
-Group: ${config.respondGroup}
-AutoRead: ${config.autoread}
-AutoTyping: ${config.autotyping}
-Admin: ${config.admins.join(", ")}`
-      })
-      return
-    }
-
     if (!config.botActive || !config.replyActive) return
 
-    // ===== AUTO TOOLS =====
+    // ===== TOOLS =====
     if (/jam|tanggal|waktu/i.test(lower)) {
       await sock.sendMessage(from, { text: get_current_time() })
       return
@@ -251,7 +223,6 @@ Admin: ${config.admins.join(", ")}`
       return
     }
 
-    // ===== FALLBACK =====
     await sock.sendMessage(from, {
       text: "🙂 Oke, tapi coba jelasin dikit lagi ya."
     })
