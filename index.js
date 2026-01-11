@@ -13,19 +13,23 @@ import readline from "readline"
 
 // ================= BASIC INFO =================
 const BOT_NAME = "asisbot"
-const BOT_VERSION = "1.1.0"
+const BOT_VERSION = "1.2.0"
 const RELEASE_DATE = "Januari 2026"
 const CREATOR_NAME = "Agus Hermanto"
 const CREATOR_CONTACT = "https://6285607063906"
-
-// Nomor admin notifikasi (ONLINE / DISCONNECT)
 const NOTIFY_JID = "6285607063906@s.whatsapp.net"
 
-// ================= CONFIG =================
+// ================= LOAD CONFIG =================
 const CONFIG_FILE = "./bot-config.json"
+const ADMIN_FILE = "./admin.json"
+
 let config = JSON.parse(fs.readFileSync(CONFIG_FILE))
+let adminData = JSON.parse(fs.readFileSync(ADMIN_FILE))
+
 const saveConfig = () =>
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2))
+
+const isAdmin = number => adminData.admins.includes(number)
 
 // ================= MEMORY =================
 const memory = {}
@@ -35,7 +39,7 @@ function remember(jid, role, content) {
   if (memory[jid].length > 6) memory[jid].shift()
 }
 
-// ================= AI (GROQ) =================
+// ================= AI =================
 async function askAI(jid, prompt) {
   remember(jid, "user", prompt)
 
@@ -52,8 +56,7 @@ async function askAI(jid, prompt) {
           role: "system",
           content:
             "Kamu adalah asisbot, teman ngobrol santai. " +
-            "Bahasa Indonesia ringan, nggak formal. " +
-            "Pakai emoticon secukupnya 🙂."
+            "Bahasa Indonesia ringan, nggak formal, emoticon secukupnya 🙂."
         },
         ...(memory[jid] || [])
       ],
@@ -126,7 +129,7 @@ async function startBot() {
     browser: ["Ubuntu", "Chrome", "120"]
   })
 
-  // ===== PAIRING CODE =====
+  // ===== PAIRING ONLY FIRST TIME =====
   if (!state.creds.registered) {
     rl.question("Masukkan nomor WhatsApp (62xxxx): ", async num => {
       const code = await sock.requestPairingCode(num.replace(/\D/g, ""))
@@ -137,7 +140,7 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds)
 
-  // ===== CONNECTION HANDLER =====
+  // ===== CONNECTION HANDLER (NO RE-PAIRING BUG FIX) =====
   sock.ev.on("connection.update", async update => {
     const { connection, lastDisconnect } = update
 
@@ -145,7 +148,6 @@ async function startBot() {
       startTime = Date.now()
       console.log("✅ Bot terhubung ke WhatsApp")
 
-      // 🔔 NOTIFIKASI ONLINE
       await sock.sendMessage(NOTIFY_JID, {
         text: "✅ asisbot ONLINE & siap digunakan."
       })
@@ -155,15 +157,12 @@ async function startBot() {
       const reason = lastDisconnect?.error?.output?.statusCode
       console.log("⚠ Koneksi terputus:", reason)
 
-      // 🔔 NOTIFIKASI DISCONNECT
-      try {
-        await sock.sendMessage(NOTIFY_JID, {
-          text: `⚠ asisbot DISCONNECT\nReason: ${reason}`
-        })
-      } catch {}
+      await sock.sendMessage(NOTIFY_JID, {
+        text: `⚠ asisbot DISCONNECT\nReason: ${reason}`
+      })
 
       if (reason === DisconnectReason.loggedOut) {
-        console.log("🔁 Pairing expired, reset session...")
+        console.log("🔁 Logged out, reset session & pairing ulang")
         fs.rmSync("./session", { recursive: true, force: true })
       }
 
@@ -171,7 +170,7 @@ async function startBot() {
     }
   })
 
-  // ===== MESSAGE HANDLER =====
+  // ================= MESSAGE HANDLER =================
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const m = messages[0]
     if (!m?.message || m.key.fromMe) return
@@ -181,7 +180,7 @@ async function startBot() {
     if (isGroup && !config.respondGroup) return
 
     const sender = (m.key.participant || from).split("@")[0]
-    const isAdmin = config.admins.includes(sender)
+    const admin = isAdmin(sender)
 
     const text =
       m.message.conversation ||
@@ -189,35 +188,22 @@ async function startBot() {
       ""
     const lower = text.toLowerCase().trim()
 
-    // ===== STATUS =====
-    if (lower === ".status") {
-      const ping = Date.now() - startTime
-      await sock.sendMessage(from, {
-        text: `🤖 STATUS BOT
-Nama: ${BOT_NAME}
-Versi: ${BOT_VERSION}
-Ping: ${ping} ms
-Status: Online`
-      })
-      return
-    }
-
-    // ===== ADMIN MENU =====
-    if (lower === ".menu" && isAdmin) {
+    // ===== MENU ADMIN (PRIORITY) =====
+    if (lower === ".menu" && admin) {
       await sock.sendMessage(from, {
         text: `🛠️ MENU ADMIN
 .reply on/off
 .group on/off
 .autoread on/off
 .autotyping on/off
-.owner
-.status`
+.status
+.owner`
       })
       return
     }
 
     // ===== ADMIN COMMAND =====
-    if (isAdmin && lower.startsWith(".")) {
+    if (admin && lower.startsWith(".")) {
       if (lower === ".group on") config.respondGroup = true
       if (lower === ".group off") config.respondGroup = false
       if (lower === ".reply on") config.replyActive = true
@@ -234,19 +220,30 @@ Status: Online`
 
     if (!config.botActive || !config.replyActive) return
 
+    // ===== STATUS =====
+    if (lower === ".status") {
+      const ping = Date.now() - startTime
+      await sock.sendMessage(from, {
+        text: `🤖 STATUS BOT
+Nama: ${BOT_NAME}
+Versi: ${BOT_VERSION}
+Ping: ${ping} ms
+Status: Online`
+      })
+      return
+    }
+
     // ===== FIXED ANSWERS =====
     if (/siapa pencipta/i.test(lower)) {
       await sock.sendMessage(from, {
-        text: `👤 *Pencipta Bot*
-Nama: ${CREATOR_NAME}
-Kontak: ${CREATOR_CONTACT}`
+        text: `👤 Pencipta: ${CREATOR_NAME}\nKontak: ${CREATOR_CONTACT}`
       })
       return
     }
 
     if (/kapan.*(rilis|diluncurkan|dibuat)/i.test(lower)) {
       await sock.sendMessage(from, {
-        text: `📅 Aku mulai dirilis pada *${RELEASE_DATE}* 🙂`
+        text: `📅 Aku mulai dirilis *${RELEASE_DATE}* 🙂`
       })
       return
     }
