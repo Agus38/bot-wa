@@ -1,34 +1,7 @@
-// ================= AUTO DEPENDENCY CHECK =================
-import { execSync } from "child_process"
 import fs from "fs"
-
-const requiredDeps = [
-  "@whiskeysockets/baileys",
-  "node-fetch",
-  "pino",
-  "dotenv",
-  "mathjs"
-]
-
-console.log("🔍 Mengecek dependency...\n")
-
-for (const dep of requiredDeps) {
-  try {
-    require.resolve(dep)
-    console.log(`✅ ${dep}`)
-  } catch {
-    console.log(`⬇️  ${dep} belum ada, menginstall...`)
-    execSync(`npm install ${dep}`, { stdio: "inherit" })
-    console.log(`✅ ${dep} terpasang`)
-  }
-}
-
-console.log("\n🚀 Semua dependency siap!\n")
-
-// ================= CORE =================
 import fetch from "node-fetch"
-import { evaluate } from "mathjs"
 import "dotenv/config"
+import { evaluate } from "mathjs"
 import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
@@ -38,34 +11,14 @@ import Pino from "pino"
 import readline from "readline"
 
 // ================= CONFIG =================
-const BOT_NAME = "asisbot"
 const CONFIG_FILE = "./bot-config.json"
 
-let config = {
-  botActive: true,
-  replyActive: true,
-  respondGroup: false,
-  autoread: false,
-  autotyping: false,
-  admins: []
-}
-
-if (fs.existsSync(CONFIG_FILE)) {
-  config = { ...config, ...JSON.parse(fs.readFileSync(CONFIG_FILE)) }
-}
-
+let config = JSON.parse(fs.readFileSync(CONFIG_FILE))
 const saveConfig = () =>
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2))
 
-// ================= UTIL =================
-function isInvalidCity(word) {
-  return ["sekarang", "saat ini", "hari ini", "ini", "tadi"].includes(
-    word.trim()
-  )
-}
-
 // ================= TOOLS =================
-function get_current_time() {
+const get_current_time = () => {
   const d = new Date()
   return `🕒 ${d.toLocaleDateString("id-ID", {
     weekday: "long",
@@ -73,59 +26,38 @@ function get_current_time() {
     month: "long",
     year: "numeric",
     timeZone: "Asia/Jakarta"
-  })}\n⏰ ${d.toLocaleTimeString("id-ID", {
-    timeZone: "Asia/Jakarta"
-  })}`
+  })}\n⏰ ${d.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}`
 }
 
-async function web_search(query) {
-  try {
-    const q = `${query} site:id`
-    const res = await fetch(
-      `https://api.duckduckgo.com/?q=${encodeURIComponent(
-        q
-      )}&format=json&kl=id-id&no_html=1`
-    )
-    const j = await res.json()
-    if (j.AbstractText) return j.AbstractText
-    if (j.RelatedTopics?.length) return j.RelatedTopics[0].Text
-    return "😅 Aku belum nemu info yang pas."
-  } catch {
-    return "😅 Lagi ada kendala pas nyari info."
-  }
+const web_search = async query => {
+  const q = `${query} site:id`
+  const res = await fetch(
+    `https://api.duckduckgo.com/?q=${encodeURIComponent(
+      q
+    )}&format=json&kl=id-id&no_html=1`
+  )
+  const j = await res.json()
+  return j.AbstractText || "😅 Aku belum nemu info yang pas."
 }
 
-async function get_weather(city) {
-  try {
-    const geo = await fetch(
-      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
-        city + ", Indonesia"
-      )}&count=1&language=id`
-    ).then(r => r.json())
+const get_weather = async city => {
+  const geo = await fetch(
+    `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
+      city + ", Indonesia"
+    )}&count=1`
+  ).then(r => r.json())
 
-    if (!geo.results?.length)
-      return `😅 Aku nggak nemu kota *${city}*.`
+  if (!geo.results?.length) return "😅 Kotanya nggak ketemu."
 
-    const { latitude, longitude, name } = geo.results[0]
-    const w = await fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`
-    ).then(r => r.json())
+  const { latitude, longitude, name } = geo.results[0]
+  const w = await fetch(
+    `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`
+  ).then(r => r.json())
 
-    const c = w.current_weather
-    return `🌦️ Cuaca di *${name}*
+  const c = w.current_weather
+  return `🌦️ Cuaca di *${name}*
 • Suhu: ${c.temperature}°C
 • Angin: ${c.windspeed} km/jam`
-  } catch {
-    return "😅 Gagal ambil info cuaca."
-  }
-}
-
-function calculate_math(expr) {
-  try {
-    return `🧮 Hasilnya: ${evaluate(expr)}`
-  } catch {
-    return "😅 Hitungannya kayaknya salah."
-  }
 }
 
 // ================= BOT =================
@@ -163,8 +95,7 @@ async function startBot() {
     const isGroup = from.endsWith("@g.us")
     if (isGroup && !config.respondGroup) return
 
-    const senderJid = m.key.participant || from
-    const sender = senderJid.split("@")[0]
+    const sender = (m.key.participant || from).split("@")[0]
     const isAdmin = config.admins.includes(sender)
 
     const text =
@@ -173,13 +104,20 @@ async function startBot() {
       ""
     const lower = text.toLowerCase().trim()
 
-    if (config.autoread) await sock.readMessages([m.key])
-    if (config.autotyping) await sock.sendPresenceUpdate("composing", from)
+    // ===== CLAIM OWNER =====
+    if (lower === ".claim") {
+      if (config.admins.length === 0) {
+        config.admins.push(sender)
+        saveConfig()
+        await sock.sendMessage(from, { text: "🎉 Kamu sekarang owner." })
+      }
+      return
+    }
 
-    // ===== MENU ADMIN =====
+    // ===== MENU =====
     if (lower === ".menu" && isAdmin) {
       await sock.sendMessage(from, {
-        text: `🛠️ MENU ADMIN
+        text: `🛠️ MENU
 .reply on/off
 .autoread on/off
 .autotyping on/off
@@ -190,7 +128,25 @@ async function startBot() {
       return
     }
 
-    if (!config.botActive || !config.replyActive) return
+    if (!config.replyActive) return
+
+    // ===== ADMIN SHORT COMMAND =====
+    if (isAdmin) {
+      if (lower === ".group on") config.respondGroup = true
+      if (lower === ".group off") config.respondGroup = false
+      if (lower === ".reply on") config.replyActive = true
+      if (lower === ".reply off") config.replyActive = false
+      if (lower === ".autoread on") config.autoread = true
+      if (lower === ".autoread off") config.autoread = false
+      if (lower === ".autotyping on") config.autotyping = true
+      if (lower === ".autotyping off") config.autotyping = false
+
+      if (lower.startsWith(".")) {
+        saveConfig()
+        await sock.sendMessage(from, { text: "✅ Oke, sudah diatur." })
+        return
+      }
+    }
 
     // ===== TOOLS =====
     if (/jam|tanggal|waktu/i.test(lower)) {
@@ -198,22 +154,15 @@ async function startBot() {
       return
     }
 
-    if (/cuaca|perkiraan/i.test(lower)) {
-      const match = lower.match(/di\s+([a-z\s]+)/i)
-      let city = match ? match[1].trim() : null
-      if (city && isInvalidCity(city)) city = null
-
-      if (city) {
-        await sock.sendMessage(from, { text: await get_weather(city) })
-      } else {
-        await sock.sendMessage(from, { text: "📍 Di kota mana?" })
-      }
+    if (/cuaca/i.test(lower)) {
+      const city = lower.replace(/.*di\s+/i, "")
+      await sock.sendMessage(from, { text: await get_weather(city) })
       return
     }
 
     if (/hitung|=|\+|\-|\*|\//.test(lower)) {
       await sock.sendMessage(from, {
-        text: calculate_math(text.replace(/hitung/gi, "").trim())
+        text: `🧮 ${evaluate(text.replace(/hitung/gi, ""))}`
       })
       return
     }
@@ -223,9 +172,7 @@ async function startBot() {
       return
     }
 
-    await sock.sendMessage(from, {
-      text: "🙂 Oke, tapi coba jelasin dikit lagi ya."
-    })
+    await sock.sendMessage(from, { text: "🙂 Oke, jelasin dikit lagi ya." })
   })
 }
 
