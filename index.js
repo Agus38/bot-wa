@@ -12,10 +12,36 @@ import readline from "readline"
 
 // ================= CONFIG =================
 const CONFIG_FILE = "./bot-config.json"
-
 let config = JSON.parse(fs.readFileSync(CONFIG_FILE))
 const saveConfig = () =>
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2))
+
+// ================= AI (GROQ) =================
+async function askAI(prompt) {
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.GROQ_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: "llama-3.1-8b-instant",
+      messages: [
+        {
+          role: "system",
+          content:
+            "Kamu adalah asisbot, teman ngobrol santai. " +
+            "Jawab pakai Bahasa Indonesia yang ringan, nggak formal."
+        },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.7
+    })
+  })
+
+  const j = await res.json()
+  return j.choices?.[0]?.message?.content || null
+}
 
 // ================= TOOLS =================
 const get_current_time = () => {
@@ -29,11 +55,10 @@ const get_current_time = () => {
   })}\n⏰ ${d.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}`
 }
 
-const web_search = async query => {
-  const q = `${query} site:id`
+const web_search = async q => {
   const res = await fetch(
     `https://api.duckduckgo.com/?q=${encodeURIComponent(
-      q
+      q + " site:id"
     )}&format=json&kl=id-id&no_html=1`
   )
   const j = await res.json()
@@ -119,19 +144,17 @@ async function startBot() {
       await sock.sendMessage(from, {
         text: `🛠️ MENU
 .reply on/off
+.group on/off
 .autoread on/off
 .autotyping on/off
-.group on/off
 .owner
 .status`
       })
       return
     }
 
-    if (!config.replyActive) return
-
     // ===== ADMIN SHORT COMMAND =====
-    if (isAdmin) {
+    if (isAdmin && lower.startsWith(".")) {
       if (lower === ".group on") config.respondGroup = true
       if (lower === ".group off") config.respondGroup = false
       if (lower === ".reply on") config.replyActive = true
@@ -141,14 +164,14 @@ async function startBot() {
       if (lower === ".autotyping on") config.autotyping = true
       if (lower === ".autotyping off") config.autotyping = false
 
-      if (lower.startsWith(".")) {
-        saveConfig()
-        await sock.sendMessage(from, { text: "✅ Oke, sudah diatur." })
-        return
-      }
+      saveConfig()
+      await sock.sendMessage(from, { text: "✅ Oke, sudah diatur." })
+      return
     }
 
-    // ===== TOOLS =====
+    if (!config.botActive || !config.replyActive) return
+
+    // ===== TOOLS AUTO =====
     if (/jam|tanggal|waktu/i.test(lower)) {
       await sock.sendMessage(from, { text: get_current_time() })
       return
@@ -172,7 +195,11 @@ async function startBot() {
       return
     }
 
-    await sock.sendMessage(from, { text: "🙂 Oke, jelasin dikit lagi ya." })
+    // ===== AI FALLBACK (INI YANG SEBELUMNYA TIDAK ADA) =====
+    const aiReply = await askAI(text)
+    await sock.sendMessage(from, {
+      text: aiReply || "😅 Lagi error dikit, coba ulangi ya."
+    })
   })
 }
 
